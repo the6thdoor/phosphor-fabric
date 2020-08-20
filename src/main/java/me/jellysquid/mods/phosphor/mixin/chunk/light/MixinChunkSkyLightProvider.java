@@ -1,5 +1,6 @@
 package me.jellysquid.mods.phosphor.mixin.chunk.light;
 
+import org.objectweb.asm.Opcodes;
 import me.jellysquid.mods.phosphor.common.chunk.level.LevelPropagatorExtended;
 import me.jellysquid.mods.phosphor.common.chunk.light.LightProviderBlockAccess;
 import me.jellysquid.mods.phosphor.common.util.LightUtil;
@@ -13,17 +14,24 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.shape.VoxelShape;
 import net.minecraft.util.shape.VoxelShapes;
 import net.minecraft.world.LightType;
+import net.minecraft.world.chunk.ChunkNibbleArray;
 import net.minecraft.world.chunk.ChunkProvider;
 import net.minecraft.world.chunk.light.ChunkLightProvider;
 import net.minecraft.world.chunk.light.ChunkSkyLightProvider;
 import net.minecraft.world.chunk.light.SkyLightStorage;
+import net.minecraft.world.chunk.light.LightStorage;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.Unique;
+import org.spongepowered.asm.mixin.Intrinsic;
+import org.spongepowered.asm.mixin.injection.Slice;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
@@ -50,9 +58,6 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
 
     private int counterBranchA, counterBranchB, counterBranchC;
 
-    @Unique
-    BlockState fromState;
-
     /**
      * This breaks up the call to method_20479 into smaller parts so we do not have to pass a mutable heap object
      * to the method in order to extract the light result. This has a few other advantages, allowing us to:
@@ -72,10 +77,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
                 ordinal = 2,
                 shift = At.Shift.AFTER
                 ),
-        locals = LocalCapture.PRINT,
         cancellable = true
     )
     public void getPropLevel(long fromId, long toId, int currentLevel, CallbackInfoReturnable<Integer> ci) {
+        // This patch is sort of ugly, but it works and is highly compatible with other mods.
         int toX = BlockPos.unpackLongX(toId);
         int toY = BlockPos.unpackLongY(toId);
         int toZ = BlockPos.unpackLongZ(toId);
@@ -90,8 +95,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
         int fromY = BlockPos.unpackLongY(fromId);
         int fromZ = BlockPos.unpackLongZ(fromId);
 
+        BlockState fromState = null;
+
         if (fromState == null) {
-            BlockState fromState = this.getBlockStateForLighting(fromX, fromY, fromZ);
+            fromState = this.getBlockStateForLighting(fromX, fromY, fromZ);
         }
 
         // Most light updates will happen between two empty air blocks, so use this to assume some properties
@@ -154,26 +161,25 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
         ci.setReturnValue(currentLevel + Math.max(1, out));
     }
 
-    @Redirect(
-        method = "getPropagatedLevel(JJI)I",
-        at = @At(
-                value = "JUMP",
-                opcode = Opcodes.ELSE,
-                ordinal = 1,
-                shift = At.Shift.AFTER
-                )
-    )
-    private void avoidAllocation() {}
-    
-    @Unique
-    int x, z, localX, localY, localZ;
-
-    // Could potentially be bad...
     @Unique
     BlockState fromState;
 
-    @Intrinsic
-    long tmpSrcPos;
+    @Unique
+    int x, y, z;
+
+    @Unique
+    long chunkId; 
+
+    @Unique
+    long fromId;
+
+    @Inject(
+        method = "propagateLevel(JIZ)V",
+        at = @At("HEAD")
+    )
+    private void storeId(long id, int targetLevel, boolean mergeAsMin, CallbackInfo ci) {
+        this.fromId = id;
+    }
 
     @Inject(
         method = "propagateLevel(JIZ)V",
@@ -184,115 +190,162 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
         locals = LocalCapture.CAPTURE_FAILSOFT,
         cancellable = true
     )
-    private void sameChunkFastPath(long id, int targetLevel, boolean mergeAsMin, CallbackInfo ci, long chunkId, int y, int localY, int chunkY) {
-        x = BlockPos.unpackLongX(id);
-        z = BlockPos.unpackLongZ(id);
-        localX = getLocalCoord(x);
-        localZ = getLocalCoord(z);
+    private void propagateFastPath(long id, int targetLevel, boolean mergeAsMin, CallbackInfo ci, long chunkId, int y, int localY, int chunkY) {
+        this.x = BlockPos.unpackLongX(id);
+        this.y = y;
+        this.z = BlockPos.unpackLongZ(id);
+        int localX = getLocalCoord(x);
+        int localZ = getLocalCoord(z);
+        this.chunkId = chunkId;
 
-        this.fromState = this.getBlockStateForLighting(x, y, z);
+        BlockState fromState = this.getBlockStateForLighting(x, y, z);
+        this.fromState = fromState;
 
         // Fast-path: Use much simpler logic if we do not need to access adjacent chunks
         if (localX > 0 && localX < 15 && localY > 0 && localY < 15 && localZ > 0 && localZ < 15) {
             for (Direction dir : DIRECTIONS) {
-                this.propagateLevel(id, BlockPos.asLong(x + dir.getOffsetX(), y + dir.getOffsetY(), z + dir.getOffsetZ()), targetLevel, mergeAsMin);
+                this.propagateLevel(this.fromId, fromState, BlockPos.asLong(x + dir.getOffsetX(), y + dir.getOffsetY(), z + dir.getOffsetZ()), targetLevel, mergeAsMin);
             }
 
             ci.cancel();
         }
     }
 
-    /**
-     * A few key optimizations are made here, in particular:
-     * - The code avoids un-packing coordinates as much as possible and stores the results into local variables.
-     * - When necessary, coordinate re-packing is reduced to the minimum number of operations. Most of them can be reduced
-     * to only updating the Y-coordinate versus re-computing the entire integer.
-     * - Coordinate re-packing is removed where unnecessary (such as when only comparing the Y-coordinate of two positions)
-     * - A special propagation method is used that allows the BlockState at {@param id} to be passed, allowing the code
-     * which follows to simply re-use it instead of redundantly retrieving another block state.
-     *
-     * This copies the vanilla implementation as close as possible.
-     *
-     * @reason Use faster implementation
-     * @author JellySquid
-     */
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
+                ordinal = 0
+                )
+    )
+    private long computeBlockPosY(final long srcPos, final int dx, final int dy, final int dz) {
+        return this.y + dy;
+    }
+    
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
+                ordinal = 1
+                )
+    )
+    private long computeBlockPos(final long srcPos, final int dx, final int dy, final int dz) {
+        return BlockPos.asLong(x + dx, y + dy, z + dz);
+    }
+    
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/util/math/BlockPos;offset(JLnet/minecraft/util/math/Direction;)J"
+                )
+    )
+    private long offsetDirY(final long srcPos, final Direction dir) {
+        return this.y + dir.getOffsetY();
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
+                ordinal = 1
+                )
+    )
+    private long sectionCoord1(final long y) {
+        return getSectionCoord(Math.toIntExact(y));
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
+                ordinal = 2
+                )
+    )
+    private long sectionCoord2(final long y) {
+        return getSectionCoord(Math.toIntExact(y));
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
+                ordinal = 1
+                )
+    )
+    private boolean optLookup1(final SkyLightStorage lightStorage, final long chunkY) {
+        return lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(this.chunkId, Math.toIntExact(chunkY)));
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
+                ordinal = 2
+                )
+    )
+    private boolean optLookup2(final SkyLightStorage lightStorage, final long chunkY) {
+        return lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(this.chunkId, Math.toIntExact(chunkY)));
+    }
+
     // @Overwrite
-    // public void propagateLevel(long id, int targetLevel, boolean mergeAsMin) {
-    //     long chunkId = ChunkSectionPos.fromGlobalPos(id);
-
-    //     int x = BlockPos.unpackLongX(id);
-    //     int y = BlockPos.unpackLongY(id);
-    //     int z = BlockPos.unpackLongZ(id);
-
-    //     int localX = getLocalCoord(x);
-    //     int localY = getLocalCoord(y);
-    //     int localZ = getLocalCoord(z);
-
-    //     BlockState fromState = this.getBlockStateForLighting(x, y, z);
-
-        // // Fast-path: Use much simpler logic if we do not need to access adjacent chunks
-        // if (localX > 0 && localX < 15 && localY > 0 && localY < 15 && localZ > 0 && localZ < 15) {
-        //     for (Direction dir : DIRECTIONS) {
-        //         this.propagateLevel(id, fromState, BlockPos.asLong(x + dir.getOffsetX(), y + dir.getOffsetY(), z + dir.getOffsetZ()), targetLevel, mergeAsMin);
-        //     }
-
-        //     return;
-        // }
-
-    //     int chunkY = getSectionCoord(y);
-    //     int chunkOffsetY = 0;
-
-    //     // Skylight optimization: Try to find bottom-most non-empty chunk
-    //     if (localY == 0) {
-    //         while (!this.lightStorage.hasLight(ChunkSectionPos.offset(chunkId, 0, -chunkOffsetY - 1, 0))
-    //                 && this.lightStorage.isAboveMinHeight(chunkY - chunkOffsetY - 1)) {
-    //             ++chunkOffsetY;
-    //         }
-    //     }
-
-    //     int belowY = y + (-1 - chunkOffsetY * 16);
-    //     int belowChunkY = getSectionCoord(belowY);
-
-    //     if (chunkY == belowChunkY || this.lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(chunkId, belowChunkY))) {
-    //         this.propagateLevel(id, fromState, BlockPos.asLong(x, belowY, z), targetLevel, mergeAsMin);
-    //     }
-
-    //     int aboveY = y + 1;
-    //     int aboveChunkY = getSectionCoord(aboveY);
-
-    //     if (chunkY == aboveChunkY || this.lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(chunkId, aboveChunkY))) {
-    //         this.propagateLevel(id, fromState, BlockPos.asLong(x, aboveY, z), targetLevel, mergeAsMin);
-    //     }
-
-    //     for (Direction dir : HORIZONTAL_DIRECTIONS) {
-    //         int adjX = x + dir.getOffsetX();
-    //         int adjZ = z + dir.getOffsetZ();
-
-    //         int offsetY = 0;
-
-    //         while (true) {
-    //             int adjY = y - offsetY;
-
-    //             long offsetId = BlockPos.asLong(adjX, adjY, adjZ);
-    //             long offsetChunkId = ChunkSectionPos.fromGlobalPos(offsetId);
-
-    //             boolean flag = chunkId == offsetChunkId;
-
-    //             if (flag || this.lightStorage.hasLight(offsetChunkId)) {
-    //                 this.propagateLevel(id, fromState, offsetId, targetLevel, mergeAsMin);
-    //             }
-
-    //             if (flag) {
-    //                 break;
-    //             }
-
-    //             offsetY++;
-
-    //             if (offsetY > chunkOffsetY * 16) {
-    //                 break;
-    //             }
-    //         }
-    //     }
+    // public void propagateLevel(long sourceId, long targetId, int level, boolean mergeAsMin) {
+    //     this.propagateLevel(sourceId, fromState, targetId, level, mergeAsMin);
     // }
 
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+                ordinal = 0
+                )
+    )
+    private void propLevelY1(ChunkSkyLightProvider self, long id, long belowY, int level, boolean decrease) {
+        // this.propagateLevel(this.tmpSrcPos, this.tmpSrcState, BlockPos.asLong(x, (int)belowY, z), level, decrease);
+        this.propagateLevel(this.fromId, fromState, BlockPos.asLong(x, Math.toIntExact(belowY), z), level, decrease);
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+                ordinal = 1
+                )
+    )
+    private void propLevelY2(ChunkSkyLightProvider self, long id, long aboveY, int level, boolean decrease) {
+        // this.propagateLevel(this.tmpSrcPos, fromState, BlockPos.asLong(x, (int)aboveY, z), level, decrease);
+        this.propagateLevel(this.fromId, fromState, BlockPos.asLong(x, Math.toIntExact(aboveY), z), level, decrease);
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+                ordinal = 2
+                )
+    )
+    private void propLevel1(ChunkSkyLightProvider self, long srcId, long targetId, int level, boolean decrease) {
+        this.propagateLevel(this.fromId, fromState, targetId, level, decrease);
+    }
+
+    @Redirect(
+        method = "propagateLevel(JIZ)V",
+        at = @At(
+                value = "INVOKE",
+                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+                ordinal = 3
+                )
+    )
+    private void propLevel2(ChunkSkyLightProvider self, long srcId, long targetId, int level, boolean decrease) {
+        this.propagateLevel(this.fromId, fromState, targetId, level, decrease);
+    }
 }

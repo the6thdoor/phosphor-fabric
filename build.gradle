@@ -1,3 +1,24 @@
+buildscript {
+	repositories {
+		jcenter()
+		maven {
+			name = "Fabric"
+			url = "https://maven.fabricmc.net/"
+		}
+		maven {
+			name = "Forge"
+			url = "https://files.minecraftforge.net/maven/"
+		}
+		maven { 
+			name = "Jitpack"
+			url 'https://jitpack.io/'
+		}
+	}
+	dependencies {
+        classpath 'com.github.Chocohead:fabric-loom:415c6b'
+	}
+}
+
 plugins {
     id 'fabric-loom' version '0.4-SNAPSHOT'
     id "com.matthewprenger.cursegradle" version "1.4.0"
@@ -19,7 +40,11 @@ if (build_id == null) {
 
 minecraft {
     refmapName = "mixins.phosphor.refmap.json"
-    accessWidener = file("src/main/resources/phosphor.accesswidener")
+    AT = file("src/main/resources/access-transformers.txt")
+}
+
+repositories {
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
@@ -27,6 +52,9 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 	modCompile "net.fabricmc:fabric-loader:${project.loader_version}"
+
+        include "com.github.Chocohead:Fabric-ASM:${project.fabric_asm_version}"
+        compile "com.github.Chocohead:Fabric-ASM:${project.fabric_asm_version}:dev"
 }
 
 processResources {

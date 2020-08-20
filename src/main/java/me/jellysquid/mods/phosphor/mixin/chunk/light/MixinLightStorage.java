@@ -1,6 +1,8 @@
 package me.jellysquid.mods.phosphor.mixin.chunk.light;
 
+import java.util.Iterator;
 import it.unimi.dsi.fastutil.longs.*;
+import it.unimi.dsi.fastutil.objects.ObjectSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import me.jellysquid.mods.phosphor.common.chunk.light.LightInitializer;
 import me.jellysquid.mods.phosphor.common.chunk.light.LightProviderUpdateTracker;
@@ -14,15 +16,21 @@ import net.minecraft.world.chunk.ChunkProvider;
 import net.minecraft.world.chunk.ChunkToNibbleArrayMap;
 import net.minecraft.world.chunk.light.ChunkLightProvider;
 import net.minecraft.world.chunk.light.LightStorage;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Slice;
+import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.LocalCapture;
 
 import java.util.concurrent.locks.StampedLock;
 
 @SuppressWarnings("OverwriteModifiers")
-@Mixin(LightStorage.class)
+@Mixin(value = LightStorage.class, priority = 500)
 public abstract class MixinLightStorage<M extends ChunkToNibbleArrayMap<M>> implements SharedLightStorageAccess<M> {
     @Shadow
     @Final
@@ -255,95 +263,50 @@ public abstract class MixinLightStorage<M extends ChunkToNibbleArrayMap<M>> impl
 
     private final LongSet propagating = new LongOpenHashSet();
 
-    /**
-     * @reason Avoid integer boxing, reduce map lookups and iteration as much as possible
-     * @author JellySquid
-     */
-    @Overwrite
-    public void updateLightArrays(ChunkLightProvider<M, ?> chunkLightProvider, boolean doSkylight, boolean skipEdgeLightPropagation) {
-        if (!this.hasLightUpdates() && this.lightArraysToAdd.isEmpty()) {
-            return;
-        }
+    @Redirect(
+        method = "updateLightArrays(Lnet/minecraft/world/chunk/light/ChunkLightProvider;ZZ)V",
+        at = @At(value = "INVOKE", target = "Lit/unimi/dsi/fastutil/objects/ObjectSet;iterator()Lit/unimi/dsi/fastutil/objects/ObjectIterator;", ordinal = 0)
+    )
+    private ObjectIterator<Long2ObjectMap.Entry<ChunkNibbleArray>> useFastIterator(ObjectSet<Long2ObjectMap.Entry<ChunkNibbleArray>> objSet) {
+        return Long2ObjectMaps.fastIterator(this.lightArraysToAdd);
+    }
 
-        LongSet propagating = this.propagating;
-        propagating.clear();
-
-        LongIterator it = this.lightArraysToRemove.iterator();
-
-        while (it.hasNext()) {
-            long pos = it.nextLong();
-
-            this.removeChunkData(chunkLightProvider, pos);
-
-            ChunkNibbleArray pending = this.lightArraysToAdd.remove(pos);
-            ChunkNibbleArray existing = this.lightArrays.removeChunk(pos);
-
-            if (this.field_19342.contains(ChunkSectionPos.withZeroZ(pos))) {
-                if (pending != null) {
-                    this.lightArraysToAdd.put(pos, pending);
-                } else if (existing != null) {
-                    this.lightArraysToAdd.put(pos, existing);
-                }
-            }
-        }
-
-        this.lightArrays.clearCache();
-        it = this.lightArraysToRemove.iterator();
-
-        while (it.hasNext()) {
-            this.onChunkRemoved(it.nextLong());
-        }
-
-        this.lightArraysToRemove.clear();
-        this.hasLightUpdates = false;
-
-        ObjectIterator<Long2ObjectMap.Entry<ChunkNibbleArray>> addQueue = Long2ObjectMaps.fastIterator(this.lightArraysToAdd);
-
-        while (addQueue.hasNext()) {
-            Long2ObjectMap.Entry<ChunkNibbleArray> entry = addQueue.next();
-            long pos = entry.getLongKey();
-
-            if (this.hasLight(pos)) {
-                ChunkNibbleArray array = entry.getValue();
-
-                if (this.lightArrays.get(pos) != array) {
-                    this.removeChunkData(chunkLightProvider, pos);
-
-                    this.lightArrays.put(pos, array);
-                    this.field_15802.add(pos);
-                }
-
-                // If edge light propagation will occur, we need to add the set of removed items to an intermediary set
-                // so the propagation code will not update touching faces of these sections
-                if (!skipEdgeLightPropagation) {
-                    propagating.add(pos);
-                }
-
-                // Early remove the entries from the queue so we don't have to later iterate and check hasLight again
-                addQueue.remove();
-            }
-        }
-
-        this.lightArrays.clearCache();
-
+    @Inject(
+        method = "updateLightArrays(Lnet/minecraft/world/chunk/light/ChunkLightProvider;ZZ)V",
+        slice = @Slice(
+            from = @At(value = "INVOKE", target = "Ljava/util/Iterator;hasNext()Z", ordinal = 2)
+        ),
+        at = @At(value = "JUMP", opcode = Opcodes.GOTO, ordinal = 1),
+        locals = LocalCapture.CAPTURE_FAILSOFT
+    )
+    private void earlyRemove(ChunkLightProvider chunkLightProvider, boolean arg1, boolean skipEdgeLightPropagation, CallbackInfo ci, ObjectIterator addQueue, Long2ObjectMap.Entry entry, long pos) {
+        // If edge light propagation will occur, we need to add the set of removed items to an intermediary set
+        // so the propagation code will not update touching faces of these sections
         if (!skipEdgeLightPropagation) {
-            it = propagating.iterator();
-
-            while (it.hasNext()) {
-                method_29967(chunkLightProvider, it.nextLong());
-            }
-        } else {
-            it = this.field_25621.iterator();
-
-            while (it.hasNext()) {
-                method_29967(chunkLightProvider, it.nextLong());
-            }
+            propagating.add(pos);
         }
 
-        this.field_25621.clear();
+        // Early remove the entries from the queue so we don't have to later iterate and check hasLight again
+        addQueue.remove();
+    }
 
+    @Redirect(
+        method = "updateLightArrays(Lnet/minecraft/world/chunk/light/ChunkLightProvider;ZZ)V",
+        at = @At(value = "INVOKE", target = "Lit/unimi/dsi/fastutil/longs/LongSet;iterator()Lit/unimi/dsi/fastutil/longs/LongIterator;", ordinal = 2)
+    )
+    private LongIterator usePropagatingIter(LongSet set) {
+        return propagating.iterator();
+    }
+
+    @Inject(
+        method = "updateLightArrays(Lnet/minecraft/world/chunk/light/ChunkLightProvider;ZZ)V",
+        at = @At(value = "INVOKE", target = "Lit/unimi/dsi/fastutil/longs/LongSet;clear()V", ordinal = 1),
+        cancellable = true
+    )
+    private void endEarly(CallbackInfo ci) {
         // Vanilla would normally iterate back over the map of light arrays to remove those we worked on, but
         // that is unneeded now because we removed them earlier.
+        ci.cancel();
     }
 
     /**
