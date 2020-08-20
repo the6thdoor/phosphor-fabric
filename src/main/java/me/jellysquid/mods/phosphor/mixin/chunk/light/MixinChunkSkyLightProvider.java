@@ -73,10 +73,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Inject(
         method = "getPropagatedLevel(JJI)I",
         at = @At(
-                value = "RETURN",
-                ordinal = 2,
-                shift = At.Shift.AFTER
-                ),
+            value = "RETURN",
+            ordinal = 2,
+            shift = At.Shift.AFTER
+            ),
         cancellable = true
     )
     public void getPropLevel(long fromId, long toId, int currentLevel, CallbackInfoReturnable<Integer> ci) {
@@ -168,7 +168,7 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     int x, y, z;
 
     @Unique
-    long chunkId; 
+    long chunkId;
 
     @Unique
     long fromId;
@@ -214,33 +214,33 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
-                ordinal = 0
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
+            ordinal = 0
+        )
     )
     private long computeBlockPosY(final long srcPos, final int dx, final int dy, final int dz) {
         return this.y + dy;
     }
-    
+
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
-                ordinal = 1
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/util/math/BlockPos;add(JIII)J",
+            ordinal = 1
+        )
     )
     private long computeBlockPos(final long srcPos, final int dx, final int dy, final int dz) {
         return BlockPos.asLong(x + dx, y + dy, z + dz);
     }
-    
+
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/util/math/BlockPos;offset(JLnet/minecraft/util/math/Direction;)J"
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/util/math/BlockPos;offset(JLnet/minecraft/util/math/Direction;)J"
+        )
     )
     private long offsetDirY(final long srcPos, final Direction dir) {
         return this.y + dir.getOffsetY();
@@ -249,10 +249,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
-                ordinal = 1
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
+            ordinal = 1
+        )
     )
     private long sectionCoord1(final long y) {
         return getSectionCoord(Math.toIntExact(y));
@@ -261,10 +261,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
-                ordinal = 2
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/util/math/ChunkSectionPos;fromGlobalPos(J)J",
+            ordinal = 2
+        )
     )
     private long sectionCoord2(final long y) {
         return getSectionCoord(Math.toIntExact(y));
@@ -273,10 +273,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
-                ordinal = 1
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
+            ordinal = 1
+        )
     )
     private boolean optLookup1(final SkyLightStorage lightStorage, final long chunkY) {
         return lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(this.chunkId, Math.toIntExact(chunkY)));
@@ -285,53 +285,46 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
-                ordinal = 2
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/SkyLightStorage;hasLight(J)Z",
+            ordinal = 2
+        )
     )
     private boolean optLookup2(final SkyLightStorage lightStorage, final long chunkY) {
         return lightStorage.hasLight(ChunkSectionPosHelper.updateYLong(this.chunkId, Math.toIntExact(chunkY)));
     }
 
-    // @Overwrite
-    // public void propagateLevel(long sourceId, long targetId, int level, boolean mergeAsMin) {
-    //     this.propagateLevel(sourceId, fromState, targetId, level, mergeAsMin);
-    // }
-
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
-                ordinal = 0
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+            ordinal = 0
+        )
     )
     private void propLevelY1(ChunkSkyLightProvider self, long id, long belowY, int level, boolean decrease) {
-        // this.propagateLevel(this.tmpSrcPos, this.tmpSrcState, BlockPos.asLong(x, (int)belowY, z), level, decrease);
         this.propagateLevel(this.fromId, fromState, BlockPos.asLong(x, Math.toIntExact(belowY), z), level, decrease);
     }
 
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
-                ordinal = 1
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+            ordinal = 1
+        )
     )
     private void propLevelY2(ChunkSkyLightProvider self, long id, long aboveY, int level, boolean decrease) {
-        // this.propagateLevel(this.tmpSrcPos, fromState, BlockPos.asLong(x, (int)aboveY, z), level, decrease);
         this.propagateLevel(this.fromId, fromState, BlockPos.asLong(x, Math.toIntExact(aboveY), z), level, decrease);
     }
 
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
-                ordinal = 2
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+            ordinal = 2
+        )
     )
     private void propLevel1(ChunkSkyLightProvider self, long srcId, long targetId, int level, boolean decrease) {
         this.propagateLevel(this.fromId, fromState, targetId, level, decrease);
@@ -340,10 +333,10 @@ public abstract class MixinChunkSkyLightProvider extends ChunkLightProvider<SkyL
     @Redirect(
         method = "propagateLevel(JIZ)V",
         at = @At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
-                ordinal = 3
-                )
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/chunk/light/ChunkSkyLightProvider;propagateLevel(JJIZ)V",
+            ordinal = 3
+        )
     )
     private void propLevel2(ChunkSkyLightProvider self, long srcId, long targetId, int level, boolean decrease) {
         this.propagateLevel(this.fromId, fromState, targetId, level, decrease);
